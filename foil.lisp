@@ -78,17 +78,23 @@
   (apply #'concatenate 'string 
 	 (mapcar #'(lambda (s) (if (symbolp s) (symbol-name s) s)) strings)))
 
+#-:lispworks(defvar *my-free-actions* nil)
 (defun add-special-free-action (fsym)
-  #+:lispworks(hcl:add-special-free-action fsym))
+  #+:lispworks(hcl:add-special-free-action fsym)
+  #-:lispworks(push fsym *my-free-actions*))
 
 (defun flag-special-free-action (obj)
-  #+:lispworks(hcl:flag-special-free-action obj))
+  #+:lispworks(hcl:flag-special-free-action obj)
+  #-:lispworks(let ((wref (trivial-garbage:make-weak-pointer obj)))
+                (trivial-garbage:finalize obj
+                                          (lambda ()
+                                            (loop for sym in *my-free-actions*
+                                                  do (funcall sym
+                                                           (trivial-garbage:weak-pointer-value wref)))))))
 
 (defun make-value-weak-hash-table ()
   #+:lispworks(make-hash-table :weak-kind :value)
-  #+cmu (make-hash-table :weak-p t)
-  #+sbcl (make-hash-table :weak-p nil)
-  #+allegro (make-hash-table :values :weak))
+  #-:lispworks(trivial-garbage:make-weak-hash-table :weakness :value))
 
 
 (eval-when (:compile-toplevel :load-toplevel)
@@ -697,8 +703,8 @@ The resulting file will not need a VM running to either compile or load"
       (let ((defs (do-def-foil-class name)))
         (dolist (def defs)
           (case (car def) 
-            ('ensure-package (push def ensures))
-            ('export (push (second def) (gethash (third def) exports)))
+            (ensure-package (push def ensures))
+            (export (push (second def) (gethash (third def) exports)))
             (t (push def forms))))))
     (format strm "(eval-when (:compile-toplevel :load-toplevel)~{~S~%~})~{~S~%~}"
             (remove-duplicates ensures :test #'string-equal :key #'second)
