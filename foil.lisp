@@ -85,12 +85,13 @@
 
 (defun flag-special-free-action (obj)
   #+:lispworks(hcl:flag-special-free-action obj)
-  #-:lispworks(let ((wref (trivial-garbage:make-weak-pointer obj)))
+  #-:lispworks(let ((id (fref-id obj))
+		    (vm (fref-vm obj)))
                 (trivial-garbage:finalize obj
                                           (lambda ()
                                             (loop for sym in *my-free-actions*
-                                                  do (funcall sym
-                                                           (trivial-garbage:weak-pointer-value wref)))))))
+					       do (funcall sym
+                                                           id vm))))))
 
 (defun make-value-weak-hash-table ()
   #+:lispworks(make-hash-table :weak-kind :value)
@@ -158,25 +159,37 @@ please ignore this scratchpad stuff
 (defclass fref ()
   ((vm :reader fref-vm :initarg :vm )
   (id :reader fref-id :initarg :id)
-  (rev :accessor fref-rev :initarg :rev)
+  (rev :reader fref-rev :initarg :rev)
   (type :accessor fref-type :initarg :type)
   (hash :accessor fref-hash :initarg :hash)
   (val :accessor fref-val :initarg :val))
   (:default-initargs :vm *fvm* :type nil :hash nil :val nil))
 
+(defmethod (setf fref-rev) (rev (fref fref))
+  (setf (gethash (fref-id fref) (fvm-idrev-table (fref-vm fref) ))
+	rev
+	(slot-value fref 'rev) rev))
+
+(defmethod initialize-instance :after ((fref fref) &rest initargs)
+  (declare (ignorable initargs))
+  (setf (gethash (fref-id fref) (fvm-idrev-table (fref-vm fref) ))
+	(fref-rev fref)))
+	   
+
 (defun make-fref (id rev &key type hash val)
   (let ((ret (make-instance 'fref :id id :rev rev :type type :hash hash :val val)))
-    #+lispworks (flag-special-free-action ret)
-    #+cmu (ext:finalize ret #'foil::free-fref)
-    #+sbcl (sb-ext:finalize ret #'foil::free-fref)
-    #+allegro (excl:schedule-finalization ret #'foil::free-fref)
+    (flag-special-free-action ret)
+    ;#+cmu (ext:finalize ret #'foil::free-fref)
+    ;#+sbcl (sb-ext:finalize ret #'foil::free-fref)
+    ;#+allegro (excl:schedule-finalization ret #'foil::free-fref)
     ret))
 
-(defun free-fref (obj)
-  (when (typep obj 'fref)
-    (push obj (fvm-free-list (fref-vm obj)))))
+#-lispworks(defun free-fref (id vm)
+	     (push id (fvm-free-list vm)))
+#+lispworks(defun free-fref (obj)
+	     (when (typep obj 'fref)
+	       (push obj (fvm-free-list (fref-vm obj)))))
 
-#+lispworks 
  (add-special-free-action 'foil::free-fref)
 
 (defmethod print-object ((fref fref) stream)
@@ -184,6 +197,7 @@ please ignore this scratchpad stuff
 
 (defclass foreign-vm ()
   ((stream :initarg :stream :reader fvm-stream)
+   (idrev-table :initform (make-hash-table) :reader fvm-idrev-table)
    (fref-table :initform (make-value-weak-hash-table) :reader fvm-fref-table)
    (symbol-table :initform (make-hash-table) :reader fvm-symbol-table)
    (free-list :initform nil :accessor fvm-free-list)))
@@ -204,10 +218,21 @@ please ignore this scratchpad stuff
       (force-output send-stream)
       (process-return-message))))
 
-(defun free-frefs (strm frefs)
+#+lispworks(defun free-frefs (strm frefs)
   (format strm "(:free")
   (dolist (fref frefs)
     (format strm " ~S ~S" (fref-id fref) (fref-rev fref)))
+  (format strm ")")
+  (force-output strm)
+  (process-return-message))
+
+#-lispworks(defun free-frefs (strm ids)
+  (format strm "(:free")
+  (dolist (id ids)
+    (let ((rev (gethash id (fvm-idrev-table *fvm*))))
+      (when rev
+	(format strm " ~S ~S" id rev)
+	(remhash id (fvm-idrev-table *fvm*)))))
   (format strm ")")
   (force-output strm)
   (process-return-message))
